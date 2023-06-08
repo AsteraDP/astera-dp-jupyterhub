@@ -1,0 +1,16 @@
+import os
+import subprocess
+
+### hook function to create home dir if it doesn't exists
+def create_dir_hook(spawner):
+    username = spawner.user.name
+    if not os.path.exists(os.path.join('/home', username)):
+        subprocess.call(["sudo", "/sbin/mkhomedir_helper", spawner.user.name])
+        home = os.path.join('/home', username)
+        os.system("mkdir %s/shared" % (home))
+        os.system("mount --bind /opt/shared %s/shared" % (home))
+
+# attach the hook function to the spawner
+c.Spawner.pre_spawn_hook = create_dir_hook
+c.Spawner.cmd = ['/opt/jupyterhub/venv/bin/jupyterhub-singleuser']
+c.PAMAuthenticator.admin_groups = {{ jupyter_admin_groups }}

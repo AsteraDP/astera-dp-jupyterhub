@@ -1,0 +1,33 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          jupyterhub
+# Required-Start:    $all
+# Required-Stop:
+# Default-Start:     2 3 4 5
+# Default-Stop:
+# Short-Description: jupyterhub service
+### END INIT INFO
+
+
+DESC="jupyterhub"
+DAEMON=/opt/jupyterhub/venv/bin/jupyterhub
+HOME=/etc/jupyterhub
+USER=root
+
+case "$1" in
+  start)
+    echo "Starting jupyterhub..."
+    cd $HOME
+    sudo -u $USER $DAEMON &
+    ;;
+  stop)
+    echo "Stopping jupyterhub..."
+    pkill jupyterhub
+    ;;
+  *)
+    echo "Usage: $0 {start|stop}"
+    exit 1
+    ;;
+esac
+
+exit 0

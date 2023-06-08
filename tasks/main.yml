@@ -1,0 +1,200 @@
+---
+# file: roles/jupyter/tasks/main.yml
+
+- name: customize /etc/environment
+  ansible.builtin.lineinfile:
+    dest: "/etc/environment"
+    state: present
+    regexp: "^{{ item.key }}="
+    line: "{{ item.key }}={{ item.value }}"
+  with_items: "{{ os_environment }}"
+  when: (os_environment is defined) and (os_environment|length != 0)
+
+- name: make sure necessary packages are installed
+  apt: name={{item}} state=present update_cache=yes
+  with_items: "{{jupyter_pkgs}}"
+  tags: jupyter
+
+- name: Install the gpg key for nodejs LTS
+  apt_key:
+    url: "https://deb.nodesource.com/gpgkey/nodesource.gpg.key"
+    state: present
+
+- name: Install the nodejs LTS repos
+  apt_repository:
+    repo: "deb https://deb.nodesource.com/node_{{ NODEJS_VERSION }}.x {{ ansible_distribution_release }} main"
+    state: present
+    update_cache: yes
+
+- name: Install the nodejs
+  apt:
+    name: nodejs
+    state: present
+
+- name: install npm package configurable-http-proxy
+  npm: name=configurable-http-proxy global=yes state=present
+  tags: jupyter
+
+- name: create folder for jupyterhub venv
+  file: path=/opt/jupyterhub state=directory mode=0755 owner=root group=root
+  tags: jupyter
+
+- name: create python3 virtualenv in /opt/jupyterhub
+  shell:
+    chdir: /opt/jupyterhub/
+    cmd: python3 -m venv venv && chown root:root -R venv
+  tags: jupyter
+
+- name: create jupyterhub folder in etc
+  file: path=/etc/jupyterhub state=directory mode=0755 owner=root group=root
+  tags: jupyter
+
+- name: copy requirements file for jupyterhub
+  copy: src=requirements.txt dest=/root/jupyterhub_requirements.txt
+  tags: jupyter
+
+- name: upgrade pip
+  pip:
+    chdir: /opt/jupyterhub/
+    name: pip
+    virtualenv: venv/
+    extra_args: --upgrade
+  tags: jupyter
+
+- name: install jupyter, jupyterhub via pip3-venv
+  pip: 
+    chdir: /opt/jupyterhub/
+    requirements: /root/jupyterhub_requirements.txt
+    virtualenv: venv/
+    extra_args: --upgrade
+  tags: jupyter
+
+- name: install proper pyspark version
+  pip: 
+    name: pyspark
+    chdir: /opt/jupyterhub/
+    virtualenv: venv/
+    version: {{ spark_version }}
+  tags: jupyter
+
+- name: copy clone_repo script
+  copy: src=clone_repo.sh dest=/etc/jupyterhub/clone_repo.sh mode=755 owner=root group=root
+  tags: jupyter
+
+- name: install jupyterhub config script
+  ansible.builtin.template:
+    src: ./files/jupyterhub_config.py.j2
+    dest: /etc/jupyterhub/jupyterhub_config.py
+    mode: 755
+    owner: root
+    group: root
+
+- name: set IP address
+  lineinfile: dest=/etc/jupyterhub/jupyterhub_config.py line="c.JupyterHub.hub_ip = '{{ansible_default_ipv4.address}}'"
+  when: nossl == False
+  tags: jupyter
+
+- name: set IP address
+  # lineinfile: dest=/etc/jupyterhub/jupyterhub_config.py line="c.JupyterHub.ip = '{{ansible_default_ipv4.address}}'"
+  lineinfile: dest=/etc/jupyterhub/jupyterhub_config.py line="c.JupyterHub.ip = '127.0.0.1'"
+  when: nossl == False
+  tags: jupyter
+
+- name: set IP address
+  lineinfile: dest=/etc/jupyterhub/jupyterhub_config.py line="c.JupyterHub.proxy_api_ip = '{{ansible_default_ipv4.address}}'"
+  when: nossl == False
+  tags: jupyter
+
+- name: Check to see if init file exists
+  stat: path=/etc/init.d/jupyterhub
+  register: init_exists
+  tags: jupyter
+
+- name: install jupyterhub init script
+  copy: src=jupyter.init dest=/etc/init.d/jupyterhub mode=755 owner=root group=root
+  tags: jupyter
+
+- name: Ensure hostname is in /etc/hosts file
+  lineinfile: dest=/etc/hosts regexp="{{ansible_hostname}}" line="{{ansible_default_ipv4.address}}  {{ansible_hostname}}"
+  tags: jupyter
+
+- name: Check to see if certificate exists
+  stat: path=/etc/jupyterhub/server.key
+  register: cert_exists
+  tags: jupyter
+
+- name: create self-signed SSL cert
+  command: openssl req -new -nodes -x509 -subj "/C={{ssl_country}}/ST={{ssl_state}}/L={{ssl_city}}/O={{ssl_org}}/CN=${ansible_fqdn}" -days 3650 -keyout /etc/jupyterhub/server.key -out /etc/jupyterhub/server.crt -extensions v3_ca creates=/etc/jupyterhub/server.crt
+  when:
+    - nossl == False
+    - cert_exists.stat.exists == False
+
+- name: set jupyterhub certificate
+  lineinfile: dest=/etc/jupyterhub/jupyterhub_config.py line="c.JupyterHub.ssl_cert = '/etc/jupyterhub/server.crt'"
+  when: nossl == False
+
+- name: set jupyterhub certificate
+  lineinfile: dest=/etc/jupyterhub/jupyterhub_config.py line="c.JupyterHub.ssl_key = '/etc/jupyterhub/server.key'"
+  when: nossl == False
+
+- name: remove ssl setting
+  lineinfile: dest=/etc/jupyterhub/jupyterhub_config.py line="c.JupyterHub.confirm_no_ssl = True"
+  when: nossl == True
+
+- name: add jupyterhub-admin and jupyterhub-user grouops
+  ansible.builtin.group:
+    name: "{{ item }}"
+    state: present
+  with_items:
+    - jupyterhub-admin
+    - jupyterhub-user
+
+- name: create shared dir /opt/shared
+  file:
+    path: /opt/shared
+    state: directory
+
+- name: Install ACL
+  apt:
+    name: 'acl'
+    update_cache: yes
+
+- name: Sets ACL for jupyter-admin on /opt/shared
+  ansible.posix.acl:
+    path: /opt/shared
+    entity: jupyterhub-admin
+    etype: group
+    permissions: rwx
+    recursive: yes
+    state: present
+
+- name: Sets default ACL for jupyter-admin on /opt/shared
+  ansible.posix.acl:
+    path: /opt/shared
+    entity: jupyterhub-admin
+    etype: group
+    default: yes
+    permissions: rwx
+    recursive: yes
+    state: present
+
+- name: remove standard kernel
+  ansible.builtin.shell: echo y | /opt/jupyterhub/venv/bin/python -m jupyter kernelspec remove python3
+  ignore_errors: yes
+
+- name: install ipykernel globally
+  pip:
+    name: ipykernel
+
+- name: remove standard kernel
+  ansible.builtin.shell: echo y | python3 -m jupyter kernelspec remove python3
+  ignore_errors: yes
+
+- name: add kernel with system python
+  ansible.builtin.shell: python3 -m ipykernel install --name python3 --display-name "Python3"
+
+- name: start jupyterhub
+  systemd:
+    name: jupyterhub
+    state: started
+    enabled: yes

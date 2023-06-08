@@ -1,0 +1,5 @@
+jupyter
+jupyterhub
+notebook
+jupyterlab
+jupyterlab-git

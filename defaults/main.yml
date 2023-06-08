@@ -1,0 +1,4 @@
+os_environment: {}
+jupyter_admin_groups:
+  - jupyterhub-admin
+  - sudo
